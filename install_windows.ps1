@@ -7,8 +7,9 @@
     Runs the full Windows setup in one step:
       1. Discovers your Inkscape install (registry, PATH, common locations)
       2. Copies the extension into Inkscape's user extensions directory
-      3. Disables Inkscape's first-run "boot screen" (it blocks the D-Bus
-         mechanism entirely until a document/canvas exists - see README)
+      3. Disables Inkscape's first-run "Welcome" dialog (it owns the whole
+         GTK event loop until dismissed, and an operation landing during
+         it can hang or crash Inkscape - see README)
       4. Creates the Python virtual environment and installs dependencies
       5. Prints a ready-to-paste MCP client config snippet
 
@@ -98,53 +99,86 @@ if (Test-Path $strayVenv) { Remove-Item -Recurse -Force $strayVenv }
 
 Write-Ok "Extension installed to $extensionsDir"
 
-# --- Step 4: Disable the first-run boot screen ------------------------------
-Write-Step "Disabling Inkscape's first-run boot screen"
-Write-Host "    (blocks the D-Bus mechanism entirely until disabled - see README)"
+# --- Step 4: Disable the first-run Welcome screen ---------------------------
+Write-Step "Disabling Inkscape's first-run Welcome screen"
+Write-Host "    (the 'Quick Setup / Time to Draw' wizard owns the GTK event loop"
+Write-Host "    until dismissed - an operation landing during it can hang or"
+Write-Host "    crash Inkscape - see README)"
 
-$inkscapeRunning = Get-Process -Name inkscape -ErrorAction SilentlyContinue
-if ($inkscapeRunning) {
-    Write-Warn2 "Inkscape is currently running - it will overwrite preferences.xml on exit,"
-    Write-Warn2 "so this step can't be applied safely right now."
-    Write-Warn2 "Close Inkscape, then re-run this script to apply the boot-screen fix."
+# The Welcome dialog is gated by <group id="boot" mode="1"> with a nested
+# <group id="shown" ver{X.Y.Z}="1"/> keyed to the exact running version - NOT
+# by an "enabled" attribute (earlier versions of this script set that, but
+# Inkscape never reads it, so it silently did nothing).
+$versionOutput = & $inkscapeCom --version 2>$null
+$versionMatch = [regex]::Match($versionOutput, 'Inkscape\s+(\d+\.\d+(?:\.\d+)?)')
+$inkscapeVersion = if ($versionMatch.Success) { $versionMatch.Groups[1].Value } else { $null }
+if (-not $inkscapeVersion) {
+    Write-Warn2 "Could not determine Inkscape's version from '$versionOutput' - skipping this step."
+    Write-Warn2 "You can dismiss the Welcome screen manually: uncheck 'Show this every time' on its"
+    Write-Warn2 "'Time to Draw' tab and click New Document."
 } else {
-    $prefsPath = Join-Path $userDataDir "preferences.xml"
-    if (-not (Test-Path $prefsPath)) {
-        Write-Warn2 "preferences.xml doesn't exist yet - launching Inkscape once to create it..."
-        Start-Process -FilePath $inkscapeExe | Out-Null
-        $deadline = (Get-Date).AddSeconds(20)
-        while (-not (Test-Path $prefsPath) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-        Start-Sleep -Seconds 1
-        Get-Process -Name inkscape -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Seconds 1
-    }
+    $verAttr = "ver$inkscapeVersion"
 
-    if (Test-Path $prefsPath) {
-        [xml]$prefs = Get-Content -Path $prefsPath -Raw
-        $bootNode = $prefs.SelectSingleNode("//group[@id='boot']")
-        if (-not $bootNode) {
-            $optionsNode = $prefs.SelectSingleNode("//group[@id='options']")
-            if (-not $optionsNode) {
-                $optionsNode = $prefs.CreateElement("group")
-                $optionsNode.SetAttribute("id", "options") | Out-Null
-                $prefs.DocumentElement.AppendChild($optionsNode) | Out-Null
-            }
-            $bootNode = $prefs.CreateElement("group")
-            $bootNode.SetAttribute("id", "boot") | Out-Null
-            $optionsNode.AppendChild($bootNode) | Out-Null
-        }
-        if ($bootNode.GetAttribute("enabled") -ne "0") {
-            $stamp = Get-Date -Format yyyyMMdd-HHmmss
-            Copy-Item -Path $prefsPath -Destination "$prefsPath.bak-install-$stamp" -Force
-            $bootNode.SetAttribute("enabled", "0") | Out-Null
-            $prefs.Save($prefsPath)
-            Write-Ok "Boot screen disabled (backup saved as preferences.xml.bak-install-$stamp)"
-        } else {
-            Write-Ok "Boot screen already disabled"
-        }
+    $inkscapeRunning = Get-Process -Name inkscape -ErrorAction SilentlyContinue
+    if ($inkscapeRunning) {
+        Write-Warn2 "Inkscape is currently running - it will overwrite preferences.xml on exit,"
+        Write-Warn2 "so this step can't be applied safely right now."
+        Write-Warn2 "Close Inkscape, then re-run this script to apply the Welcome-screen fix."
     } else {
-        Write-Warn2 "Could not create preferences.xml automatically."
-        Write-Warn2 "Launch Inkscape once manually, close it, then re-run this script."
+        $prefsPath = Join-Path $userDataDir "preferences.xml"
+        if (-not (Test-Path $prefsPath)) {
+            Write-Warn2 "preferences.xml doesn't exist yet - launching Inkscape once to create it..."
+            Start-Process -FilePath $inkscapeExe | Out-Null
+            $deadline = (Get-Date).AddSeconds(20)
+            while (-not (Test-Path $prefsPath) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+            Start-Sleep -Seconds 1
+            Get-Process -Name inkscape -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 1
+        }
+
+        if (Test-Path $prefsPath) {
+            [xml]$prefs = Get-Content -Path $prefsPath -Raw
+            $bootNode = $prefs.SelectSingleNode("//group[@id='boot']")
+            if (-not $bootNode) {
+                # Inkscape itself always creates this group on first launch (confirmed
+                # empirically, even before the wizard is ever completed), so this branch
+                # should never actually run - the bootstrap above guarantees preferences.xml
+                # exists first. Verified the hard way: Inkscape's Welcome-screen check is
+                # sensitive to this group's *position* among its siblings, not just its
+                # content - appending a freshly created node at the start or end of the
+                # document both failed to suppress the dialog in testing, only editing the
+                # node Inkscape itself already placed worked reliably. If this branch does
+                # trigger, treat it as unverified and confirm manually (see README).
+                Write-Warn2 "No existing boot preference group found - creating one, but this"
+                Write-Warn2 "path is unverified. If the Welcome screen still appears, dismiss it"
+                Write-Warn2 "manually once (uncheck 'Show this every time', click New Document)."
+                $bootNode = $prefs.CreateElement("group")
+                $bootNode.SetAttribute("id", "boot") | Out-Null
+                $prefs.DocumentElement.AppendChild($bootNode) | Out-Null
+            }
+            $shownNode = $bootNode.SelectSingleNode("group[@id='shown']")
+            if (-not $shownNode) {
+                $shownNode = $prefs.CreateElement("group")
+                $shownNode.SetAttribute("id", "shown") | Out-Null
+                $bootNode.AppendChild($shownNode) | Out-Null
+            }
+
+            $alreadyApplied = ($bootNode.GetAttribute("mode") -eq "1") -and ($shownNode.GetAttribute($verAttr) -eq "1")
+            if (-not $alreadyApplied) {
+                $stamp = Get-Date -Format yyyyMMdd-HHmmss
+                Copy-Item -Path $prefsPath -Destination "$prefsPath.bak-install-$stamp" -Force
+                if ($bootNode.HasAttribute("enabled")) { $bootNode.RemoveAttribute("enabled") | Out-Null }
+                $bootNode.SetAttribute("mode", "1") | Out-Null
+                $shownNode.SetAttribute($verAttr, "1") | Out-Null
+                $prefs.Save($prefsPath)
+                Write-Ok "Welcome screen disabled for Inkscape $inkscapeVersion (backup saved as preferences.xml.bak-install-$stamp)"
+            } else {
+                Write-Ok "Welcome screen already disabled for Inkscape $inkscapeVersion"
+            }
+        } else {
+            Write-Warn2 "Could not create preferences.xml automatically."
+            Write-Warn2 "Launch Inkscape once manually, close it, then re-run this script."
+        }
     }
 }
 

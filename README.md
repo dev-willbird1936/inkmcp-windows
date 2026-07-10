@@ -79,11 +79,16 @@ is ready to paste in as-is.
        inkmcpops\
        ...
    ```
-3. **Disable Inkscape's first-run "boot screen"** - it blocks the D-Bus extension dispatch entirely (no document/canvas context exists while it's showing). With Inkscape fully closed, edit `%APPDATA%\inkscape\preferences.xml` and set `enabled="0"` on the `boot` group:
+3. **Disable Inkscape's first-run "Welcome" dialog** (the "Quick Setup / Supported by You / Time to Draw" wizard) - it owns the whole GTK event loop while showing, so an operation landing during it can hang or crash Inkscape instead of reaching a real document. With Inkscape fully closed, edit `%APPDATA%\inkscape\preferences.xml`: on the existing `boot` group (Inkscape creates this automatically on first launch, so it should already be there - don't move it or recreate it elsewhere, its position matters), set `mode="1"` and add a nested `shown` group with a version-keyed attribute matching your exact Inkscape version:
    ```xml
-   <group id="boot" theme="colorful" enabled="0" />
+   <group id="boot" theme="colorful" mode="1">
+     <group id="shown" ver1.4.2="1" />
+   </group>
    ```
-   (If Inkscape is running while you edit this, it will overwrite your change on exit - close it first.)
+   (Replace `ver1.4.2` with `ver` + your Inkscape's exact version, e.g. `ver1.4.1`. Also note: this is **not** an `enabled` attribute anywhere - Inkscape doesn't read one there, so setting it silently does nothing.)
+
+   Simpler and safer: just complete the wizard once by hand - uncheck "Show this every time" on its "Time to Draw" tab and click New Document. Inkscape then writes the above structure itself, correctly positioned, on clean exit.
+   (If Inkscape is running while you edit `preferences.xml` directly, it will overwrite your change on exit - close it first.)
 4. From this repo's `inkmcp\` folder, run the one-time setup script to create a venv and install dependencies:
    ```powershell
    powershell -ExecutionPolicy Bypass -File setup_windows.ps1
@@ -320,7 +325,7 @@ svg.append(rect)
 
 ### Windows-Specific Issues
 
-1. **`gdbus` call hangs/times out with no response**: Almost always means Inkscape's first-run "boot screen" is still showing - the extension can't run without a live document/canvas. Disable it via `preferences.xml` as described in [Windows setup](#windows-setup), and make sure Inkscape was launched with a document open.
+1. **`gdbus` call hangs/times out, or Inkscape crashes outright with a `boost::stacktrace` backtrace through `Extension::save()`**: Almost always means Inkscape's first-run "Welcome" dialog (the "Quick Setup / Supported by You / Time to Draw" wizard) is still showing - it owns the whole GTK event loop, and an operation landing while it's up can hang or crash Inkscape's document-save machinery instead of reaching a real document. `install_windows.ps1` disables this automatically; if you're editing `preferences.xml` by hand, note that the dialog is **not** controlled by an `enabled` attribute anywhere - it's gated by `<group id="boot" mode="1">` with a nested `<group id="shown" ver{X.Y.Z}="1"/>` keyed to the exact Inkscape version, and that `boot` group must stay in the position Inkscape itself already placed it (Inkscape creates it automatically on first launch, before the wizard ever runs) - relocating it to the start or end of the file does **not** work, confirmed by testing. The safe manual alternative is to just complete the wizard once: uncheck "Show this every time" on the "Time to Draw" tab and click New Document.
 2. **`org.gtk.Actions.List` works but `Activate` never completes**: Confirm you're not accidentally targeting a *different* running Inkscape instance - Inkscape's GApplication forwards new invocations to whichever instance already owns the D-Bus name, so a stuck/blocked instance will silently absorb every subsequent call.
 3. **"gdbus not recognized" / wrong D-Bus session found**: Never rely on a bare `gdbus` resolved via PATH - a copy from an unrelated GLib install (MSYS2, GIMP, etc.) will autolaunch its *own* empty session bus instead of finding Inkscape's. Always resolve `gdbus.exe` as the sibling of the actual `inkscape.exe` (this is what `gdbus_util.find_gdbus()` does); override with the `INKMCP_GDBUS_PATH` env var if needed.
 4. **`python -m venv` fails with "No module named venv"**: Your shell's `python` on PATH may be shadowed by an unrelated project's virtual environment. `setup_windows.ps1` uses the `py` launcher (`py -3`) instead of bare `python` to avoid this; if invoking manually, prefer `py -3 -m venv venv` over `python -m venv venv`.
