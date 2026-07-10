@@ -64,6 +64,10 @@ Known Issue: objectBoundingBox gradients require manual nudge to refresh visibil
 - TODO: Investigate programmatic fix for objectBoundingBox refresh issue
 """
 
+# Modified 2026-07 from upstream (Shriinivas/inkmcp) for native Windows support:
+# gdbus resolution via gdbus_util instead of a bare "gdbus", and response-file polling.
+# See README.md "Changes from upstream". AGPL-3.0, same as upstream.
+
 import argparse
 import sys
 import json
@@ -72,6 +76,8 @@ import os
 import subprocess
 import re
 from typing import Dict, List, Any
+
+from gdbus_util import find_gdbus, wait_for_response_file
 
 
 def strip_python_comments(code: str) -> str:
@@ -652,7 +658,7 @@ class InkscapeClient:
 
             # Execute D-Bus command (like original system)
             cmd = [
-                "gdbus", "call",
+                find_gdbus(), "call",
                 "--session",
                 "--dest", self.dbus_service,
                 "--object-path", self.dbus_path,
@@ -669,8 +675,8 @@ class InkscapeClient:
                     "error": f"D-Bus command failed: {result.stderr}"
                 }
 
-            # Read response from response file (like original system)
-            if os.path.exists(response_file):
+            # Read response from response file (poll briefly - not guaranteed instant)
+            if wait_for_response_file(response_file):
                 try:
                     with open(response_file, 'r') as f:
                         response = json.load(f)

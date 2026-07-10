@@ -7,6 +7,10 @@ Provides access to Inkscape operations through a unified tool interface
 for SVG element creation, document manipulation, and code execution.
 """
 
+# Modified 2026-07 from upstream (Shriinivas/inkmcp) for native Windows support:
+# gdbus resolution via gdbus_util instead of a bare "gdbus", and response-file polling.
+# See README.md "Changes from upstream". AGPL-3.0, same as upstream.
+
 import json
 import logging
 import os
@@ -18,6 +22,8 @@ from typing import Any, AsyncIterator, Dict, Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
 from mcp.types import ImageContent
+
+from gdbus_util import find_gdbus, wait_for_response_file
 
 # Configure logging
 logging.basicConfig(
@@ -46,7 +52,7 @@ class InkscapeConnection:
         """Check if Inkscape is running and MCP extension is available"""
         try:
             cmd = [
-                "gdbus",
+                find_gdbus(),
                 "call",
                 "--session",
                 "--dest",
@@ -81,7 +87,7 @@ class InkscapeConnection:
 
             # Execute via D-Bus
             cmd = [
-                "gdbus",
+                find_gdbus(),
                 "call",
                 "--session",
                 "--dest",
@@ -104,9 +110,9 @@ class InkscapeConnection:
                     "data": {"error": f"D-Bus call failed: {result.stderr}"},
                 }
 
-            # Read response from response file
+            # Read response from response file (poll briefly - not guaranteed instant)
             response_file = operation_data.get("response_file")
-            if response_file and os.path.exists(response_file):
+            if response_file and wait_for_response_file(response_file):
                 try:
                     with open(response_file, "r") as f:
                         response_data = json.load(f)

@@ -1,6 +1,13 @@
-# Inkscape MCP Server
+# Inkscape MCP Server (Windows-enabled fork)
 
 A Model Context Protocol (MCP) server that enables live control of Inkscape through natural language instructions. This allows AI assistants like Claude to directly manipulate vector graphics in real-time.
+
+> **This is a fork of [Shriinivas/inkmcp](https://github.com/Shriinivas/inkmcp)**, which adds support for
+> native Windows Inkscape installs (the upstream project is Linux-only). See
+> [Changes from upstream](#changes-from-upstream) for exactly what changed and why. All credit for the
+> original design, the D-Bus/GAction mechanism, and the full `inkmcpops` element-creation system goes to
+> the upstream author - this fork only adds the Windows-specific plumbing needed to reach the same
+> mechanism from a different OS.
 
 ## Features
 
@@ -13,12 +20,13 @@ A Model Context Protocol (MCP) server that enables live control of Inkscape thro
 
 ## Platform Support
 
-- **⚠️ Currently Linux Only** - Uses D-Bus which is Linux-specific
-- **🔮 Future**: Cross-platform support possible via TCP sockets/named pipes
+- **✅ Linux** - Native D-Bus session bus
+- **✅ Windows** - Works via Inkscape's bundled GDBus (GLib's Windows D-Bus implementation autolaunches its own session bus - no separate D-Bus daemon install required). See [Windows setup](#windows-setup) below.
+- **🔮 macOS**: Untested; likely works the same way as Windows if Inkscape's GTK build includes GDBus, but not verified.
 
 ## Quick Start
 
-### 1. Installation (Linux Only)
+### 1. Installation (Linux)
 
 1. Go to the [Releases page](https://github.com/Shriinivas/inkmcp/releases)
 2. Download `inkmcp-extension.zip` from the latest release
@@ -39,14 +47,48 @@ chmod +x run_inkscape_mcp.sh inkmcpcli.py inkscape_mcp_server.py main.py
 ### 3. Start Inkscape
 Launch Inkscape normally - the extension is hidden from the menu and only accessible via D-Bus.
 
+### 1b. Installation (Windows) {#windows-setup}
+
+1. Find Inkscape's user extensions directory - run `inkscape.com --user-data-directory` (ships in Inkscape's `bin\` folder) and append `\extensions`. This is typically `%APPDATA%\inkscape\extensions`, but always confirm rather than assume.
+2. Copy `inkscape_mcp.py`, `inkscape_mcp.inx`, and the whole `inkmcp\` folder from this repo into that extensions directory, so the layout matches:
+   ```
+   %APPDATA%\inkscape\extensions\
+     inkscape_mcp.py
+     inkscape_mcp.inx
+     inkmcp\
+       gdbus_util.py
+       inkmcpcli.py
+       inkscape_mcp_server.py
+       inkmcpops\
+       ...
+   ```
+3. **Disable Inkscape's first-run "boot screen"** - it blocks the D-Bus extension dispatch entirely (no document/canvas context exists while it's showing). With Inkscape fully closed, edit `%APPDATA%\inkscape\preferences.xml` and set `enabled="0"` on the `boot` group:
+   ```xml
+   <group id="boot" theme="colorful" enabled="0" />
+   ```
+   (If Inkscape is running while you edit this, it will overwrite your change on exit - close it first.)
+4. From this repo's `inkmcp\` folder, run the one-time setup script to create a venv and install dependencies:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File setup_windows.ps1
+   ```
+5. Launch Inkscape with a document open (`inkscape.exe some.svg`, or just create a new document) before triggering any operation - the extension needs a live document/canvas to act on.
+
 ### 4. Connect with AI Tools
 
-**Auto-Setup**: The first time an AI client connects, it will automatically:
-- Create Python virtual environment in `~/.config/inkscape/extensions/inkmcp/venv/`
-- Install all required dependencies from `requirements.txt`
-- Start the MCP server
+**Auto-Setup (Linux)**: The first time an AI client connects, `run_inkscape_mcp.sh` will automatically create the venv, install dependencies, and start the server - no manual setup required.
 
-No manual setup required!
+**Windows**: run `setup_windows.ps1` once (see [Windows setup](#windows-setup) above) to create the venv, then point your MCP config directly at the venv's `python.exe` with an absolute path to `main.py` as the argument - not a wrapper script, so nothing can print to stdout and corrupt the JSON-RPC stream:
+```json
+{
+  "mcpServers": {
+    "inkscape": {
+      "command": "C:\\path\\to\\inkmcp\\venv\\Scripts\\python.exe",
+      "args": ["C:\\path\\to\\inkmcp\\main.py"]
+    }
+  }
+}
+```
+The same substitution (venv `python.exe` + absolute `main.py` path, instead of a shell script) applies to every AI tool config shown below.
 
 #### Claude Code
 Edit your Claude configuration file:
@@ -199,6 +241,7 @@ See `BLENDER_HYBRID_README.md` for detailed documentation.
 - **MCP Server**: `inkscape_mcp_server.py` - FastMCP server handling AI requests
 - **CLI Client**: `inkmcpcli.py` - Direct command-line interface for testing
 - **Operations**: `inkmcpops/` - Modular operation handlers
+- **gdbus resolution**: `gdbus_util.py` - Locates the correct `gdbus` (bare name on Linux; Inkscape's bundled `gdbus.exe` on Windows) and polls for the extension's response file
 
 ### Communication Flow
 ```
@@ -251,10 +294,17 @@ svg.append(rect)
 
 ### Common Issues
 
-1. **D-Bus not found**: Ensure you're on Linux with D-Bus session running
+1. **D-Bus not found**: Ensure you're on Linux with D-Bus session running, or on Windows using Inkscape's bundled `gdbus.exe` (see Windows issues below)
 2. **Extension not triggered**: Check Inkscape is running and extension is installed
 3. **Python environment**: Ensure virtual environment is activated with dependencies
 4. **Permissions**: Make sure scripts are executable (`chmod +x *.sh *.py`)
+
+### Windows-Specific Issues
+
+1. **`gdbus` call hangs/times out with no response**: Almost always means Inkscape's first-run "boot screen" is still showing - the extension can't run without a live document/canvas. Disable it via `preferences.xml` as described in [Windows setup](#windows-setup), and make sure Inkscape was launched with a document open.
+2. **`org.gtk.Actions.List` works but `Activate` never completes**: Confirm you're not accidentally targeting a *different* running Inkscape instance - Inkscape's GApplication forwards new invocations to whichever instance already owns the D-Bus name, so a stuck/blocked instance will silently absorb every subsequent call.
+3. **"gdbus not recognized" / wrong D-Bus session found**: Never rely on a bare `gdbus` resolved via PATH - a copy from an unrelated GLib install (MSYS2, GIMP, etc.) will autolaunch its *own* empty session bus instead of finding Inkscape's. Always resolve `gdbus.exe` as the sibling of the actual `inkscape.exe` (this is what `gdbus_util.find_gdbus()` does); override with the `INKMCP_GDBUS_PATH` env var if needed.
+4. **`python -m venv` fails with "No module named venv"**: Your shell's `python` on PATH may be shadowed by an unrelated project's virtual environment. `setup_windows.ps1` uses the `py` launcher (`py -3`) instead of bare `python` to avoid this; if invoking manually, prefer `py -3 -m venv venv` over `python -m venv venv`.
 
 ### Debug Mode
 ```bash
@@ -273,7 +323,25 @@ python inkmcpcli.py get-info --parse-out --pretty
 3. Add corresponding MCP tool in `inkscape_mcp_server.py`
 
 
+## Changes from upstream
+
+Modified 2026-07 from [Shriinivas/inkmcp](https://github.com/Shriinivas/inkmcp) to add native Windows
+support, per AGPL-3.0 §5(a). No operation-handling logic changed - `inkmcpops/`, `main.py`, and
+`inkscape_mcp.inx` are byte-identical to upstream.
+
+- **`inkmcp/gdbus_util.py`** (new) - resolves `gdbus.exe` as the sibling of the discovered
+  `inkscape.exe` instead of a bare `gdbus` on PATH (which could resolve to an unrelated GLib install's
+  D-Bus session), and polls for the extension's response file instead of assuming it's instantly present.
+- **`inkmcp/inkmcpcli.py`**, **`inkmcp/inkscape_mcp_server.py`** - use the above instead of hardcoded
+  `"gdbus"`.
+- **`inkscape_mcp.py`** - fixed a hardcoded `/tmp/error_response.json` fallback path (now uses
+  `tempfile.gettempdir()`).
+- **`inkmcp/setup_windows.ps1`** (new) - one-time Windows venv bootstrap, replacing the bash
+  `run_inkscape_mcp.sh` wrapper (see [Windows setup](#windows-setup)).
+- **README** - Windows install/troubleshooting sections, this section, and the license label fix below
+  (was incorrectly showing GPL-3.0; the project is AGPL-3.0, matching `LICENSE`).
+
 ## License
 
-[GPL-3.0](https://github.com/Shriinivas/inkmcp/blob/main/LICENSE)
+[AGPL-3.0](https://github.com/Shriinivas/inkmcp/blob/main/LICENSE) (same as upstream)
 

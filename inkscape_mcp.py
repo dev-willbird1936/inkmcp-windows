@@ -4,6 +4,10 @@ Inkscape Extension for dynamic SVG element creation
 Handles any SVG element through dynamic class instantiation
 """
 
+# Modified 2026-07 from upstream (Shriinivas/inkmcp) for native Windows support:
+# fixed a hardcoded /tmp fallback path to use tempfile.gettempdir() instead.
+# See README.md "Changes from upstream". AGPL-3.0, same as upstream.
+
 import inkex
 import json
 import os
@@ -248,7 +252,8 @@ class ElementCreator(inkex.EffectExtension):
                     "status": "error",
                     "data": {"error": "No parameters file found"},
                 }
-                self.write_response(response, "/tmp/error_response.json")
+                error_response_file = os.path.join(tempfile.gettempdir(), "error_response.json")
+                self.write_response(response, error_response_file)
                 return
 
             with open(params_file, "r") as f:
