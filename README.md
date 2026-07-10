@@ -49,6 +49,23 @@ Launch Inkscape normally - the extension is hidden from the menu and only access
 
 ### 1b. Installation (Windows) {#windows-setup}
 
+**Easiest way:** clone or download this repo, then double-click **`install_windows.bat`**
+(or run `install_windows.ps1` from PowerShell). It finds your Inkscape install, installs the
+extension, disables the first-run boot screen (see why below), creates the Python venv, and
+prints a ready-to-paste MCP config snippet - all in one step. Safe to re-run any time (e.g.
+after `git pull`); every step checks the current state first and skips whatever's already done.
+
+```powershell
+# From PowerShell, if you'd rather not double-click the .bat:
+powershell -ExecutionPolicy Bypass -File install_windows.ps1
+```
+
+Then skip to [Connect with AI Tools](#4-connect-with-ai-tools) - the snippet the script prints
+is ready to paste in as-is.
+
+<details>
+<summary>Manual steps (what the installer does under the hood - for reference, or if you need to customize something)</summary>
+
 1. Find Inkscape's user extensions directory - run `inkscape.com --user-data-directory` (ships in Inkscape's `bin\` folder) and append `\extensions`. This is typically `%APPDATA%\inkscape\extensions`, but always confirm rather than assume.
 2. Copy `inkscape_mcp.py`, `inkscape_mcp.inx`, and the whole `inkmcp\` folder from this repo into that extensions directory, so the layout matches:
    ```
@@ -73,11 +90,13 @@ Launch Inkscape normally - the extension is hidden from the menu and only access
    ```
 5. Launch Inkscape with a document open (`inkscape.exe some.svg`, or just create a new document) before triggering any operation - the extension needs a live document/canvas to act on.
 
+</details>
+
 ### 4. Connect with AI Tools
 
 **Auto-Setup (Linux)**: The first time an AI client connects, `run_inkscape_mcp.sh` will automatically create the venv, install dependencies, and start the server - no manual setup required.
 
-**Windows**: run `setup_windows.ps1` once (see [Windows setup](#windows-setup) above) to create the venv, then point your MCP config directly at the venv's `python.exe` with an absolute path to `main.py` as the argument - not a wrapper script, so nothing can print to stdout and corrupt the JSON-RPC stream:
+**Windows**: run `install_windows.ps1` (see [Windows setup](#windows-setup) above) - it prints this exact snippet with your repo's real paths already filled in, ready to paste. Either way, the config points directly at the venv's `python.exe` with an absolute path to `main.py` as the argument - not a wrapper script, so nothing can print to stdout and corrupt the JSON-RPC stream:
 ```json
 {
   "mcpServers": {
@@ -338,6 +357,10 @@ support, per AGPL-3.0 §5(a). No operation-handling logic changed - `inkmcpops/`
   `tempfile.gettempdir()`).
 - **`inkmcp/setup_windows.ps1`** (new) - one-time Windows venv bootstrap, replacing the bash
   `run_inkscape_mcp.sh` wrapper (see [Windows setup](#windows-setup)).
+- **`install_windows.ps1`**, **`install_windows.bat`** (new) - one-command installer that runs every
+  manual Windows setup step (find Inkscape, install the extension, disable the boot screen, bootstrap
+  the venv via `setup_windows.ps1`) and prints a ready-to-paste MCP config snippet. Idempotent - safe
+  to re-run after `git pull`.
 - **README** - Windows install/troubleshooting sections, this section, and the license label fix below
   (was incorrectly showing GPL-3.0; the project is AGPL-3.0, matching `LICENSE`).
 
